@@ -75,6 +75,12 @@ def audit(db, action, target, detail=None):
 
 
 def get_source(slug: str):
+    from chat_hook.app import database_path
+
+    # Pure Decisions API usage can occur without an ASGI startup or database.
+    # Avoid trying to create the protected /data directory in that case.
+    if not database_path().exists():
+        return None
     try:
         with connect() as db:
             db.row_factory = sqlite3.Row
