@@ -151,13 +151,19 @@ def get_hook_event(principal, args):
 
 
 def _upsert_outcome(event_id, woke=None, actionable=None):
+    now = utc_now()
+    acked = now if woke == 1 else None
+    labelled = now if actionable is not None else None
     with connect() as db:
-        db.execute("""INSERT INTO outcomes(event_id,woke_confirmed,actionable,reviewer,reviewed_at)
-            VALUES (?,?,?,'chatgpt',?) ON CONFLICT(event_id) DO UPDATE SET
+        db.execute("""INSERT INTO outcomes(event_id,woke_confirmed,actionable,reviewer,reviewed_at,
+            acknowledged_at,labelled_at)
+            VALUES (?,?,?,'chatgpt',?,?,?) ON CONFLICT(event_id) DO UPDATE SET
             woke_confirmed=COALESCE(excluded.woke_confirmed,outcomes.woke_confirmed),
             actionable=COALESCE(excluded.actionable,outcomes.actionable),
+            acknowledged_at=COALESCE(outcomes.acknowledged_at,excluded.acknowledged_at),
+            labelled_at=COALESCE(excluded.labelled_at,outcomes.labelled_at),
             reviewer='chatgpt',reviewed_at=excluded.reviewed_at""",
-            (event_id, woke, actionable, utc_now()))
+            (event_id, woke, actionable, now, acked, labelled))
 
 
 def acknowledge_hook_event(principal, args):

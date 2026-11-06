@@ -13,9 +13,15 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from chat_hook.app import connect, utc_now
-from chat_hook.delivery import dispatch, queue_event
+from chat_hook.delivery import (
+    dispatch,
+    event_category,
+    has_live_subscription,
+    queue_event,
+)
 from chat_hook.delivery import initialize as init_delivery
 from chat_hook.metrics import daily_report, render_text
+from chat_hook.pilot import admit
 
 SGT = ZoneInfo("Asia/Singapore")
 
@@ -60,10 +66,15 @@ def deliver_due_events(limit=50):
         live = db.execute("SELECT 1 FROM subscriptions WHERE expires_at>? LIMIT 1",
                           (utc_now(),)).fetchone()
         events = [] if live is None else [dict(r) for r in db.execute("""
-            SELECT id,source,name,triage_route FROM events
-            WHERE triage_route IN ('review','wake') AND queued_at IS NULL AND received_at>=?
-            ORDER BY received_at LIMIT ?""", (cutoff, limit))]
+            SELECT id,source,name,summary,triage_route,received_at,canary FROM events
+            WHERE triage_route IN ('review','wake') AND queued_at IS NULL AND held_reason IS NULL
+            AND received_at>=? ORDER BY received_at LIMIT ?""", (cutoff, limit))]
     for event in events:
+        if not has_live_subscription(event_category(event["source"])):
+            continue
+        # Duplicates and budget overflow are retained and reported, never sent.
+        if admit(event) is not None:
+            continue
         if not queue_event(event):
             continue
         with connect() as db:

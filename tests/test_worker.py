@@ -55,6 +55,9 @@ def test_worker_queues_beyond_first_batch(monkeypatch):
         return 204, b""
 
     monkeypatch.setattr(delivery, "signed_post", fake_post)
+    monkeypatch.setenv("CHAT_HOOK_WAKE_LIMIT_HOUR", "1000")
+    monkeypatch.setenv("CHAT_HOOK_WAKE_LIMIT_DAY", "1000")
+    monkeypatch.setenv("CHAT_HOOK_DEDUP_SECONDS", "0")
     with TestClient(app):
         add_source("manual", "projects")
         for i in range(60):

@@ -66,7 +66,12 @@ def initialize():
         add_columns(db, "deliveries", {
             "queued_at": "TEXT", "last_attempt_at": "TEXT", "delivered_at": "TEXT",
             "owner": "TEXT"})
-        add_columns(db, "events", {"queued_at": "TEXT"})
+        add_columns(db, "events", {
+            "queued_at": "TEXT", "signature": "TEXT", "held_reason": "TEXT", "held_at": "TEXT",
+            "duplicate_of": "TEXT", "canary": "INTEGER NOT NULL DEFAULT 0"})
+        add_columns(db, "outcomes", {"acknowledged_at": "TEXT", "labelled_at": "TEXT"})
+        db.execute("CREATE INDEX IF NOT EXISTS idx_events_signature ON events(signature,received_at)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_events_queued ON events(queued_at)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_deliveries_due ON deliveries(status,next_attempt)")
 
 
@@ -308,6 +313,14 @@ def unsubscribe(owner, name, arguments, delivery):
         if db.execute("DELETE FROM subscriptions WHERE id=? AND owner=?", (sid, owner)).rowcount:
             db.execute("DELETE FROM deliveries WHERE subscription_id=? AND status='pending'", (sid,))
     return {}
+
+
+def has_live_subscription(category):
+    if category is None:
+        return False
+    with connect() as db:
+        return db.execute("SELECT 1 FROM subscriptions WHERE category=? AND expires_at>? LIMIT 1",
+                          (category, utc_now())).fetchone() is not None
 
 
 def queue_event(event):
