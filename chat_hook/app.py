@@ -145,7 +145,7 @@ def iso_timestamp(value) -> str:
         return datetime.fromtimestamp(value, UTC).isoformat()
     if isinstance(value, str):
         try:
-            result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            result = datetime.fromisoformat(value)
             if result.tzinfo is not None:
                 return result.isoformat()
         except ValueError:
