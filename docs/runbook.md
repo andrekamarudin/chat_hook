@@ -4,7 +4,7 @@
 
 1. **Infisical**: create project `contabo-chat-hook` (env `prod`), grant the Contabo machine identity read access, and add:
    - `CHAT_HOOK_ADMIN_TOKEN`, `CHAT_HOOK_SOURCE_ROOT`, `CHAT_HOOK_DATA_KEY`, `CHAT_HOOK_OWNER_PASSWORD`: each 32+ random characters (`openssl rand -base64 48`).
-   - `CHAT_HOOK_SOURCES_JSON` (legacy per-source secrets, optional), `OPENAI_API_KEY` (optional, Luna Decisions), `CHAT_HOOK_REPORT_CATEGORY` (optional).
+   - `CHAT_HOOK_SOURCES_JSON` (legacy per-source secrets, optional), `OPENAI_API_KEY` (do not copy it here: `scripts/deploy.sh` merges only this key from the shared `god-keys` project; required for Luna triage), `CHAT_HOOK_REPORT_CATEGORY` (optional).
    - Rotating `CHAT_HOOK_DATA_KEY` makes stored callback secrets unreadable; ChatGPT must resubscribe afterwards.
 2. **DNS**: `hooks.bytesizeprotip.com` A record to the Contabo VPS (Cloudflare, DNS only or proxied per existing convention).
 3. **Caddy** (`self_hosting/infra/caddy/Caddyfile`):

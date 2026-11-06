@@ -23,13 +23,20 @@ if [[ -f "$INFISICAL_AGENT_ENV" ]] && [[ -f "$INFRA_DIR/scripts/infisical-env.sh
     # shellcheck disable=SC1091
     source "$INFRA_DIR/scripts/infisical-env.sh"
     infisical_fetch "$INFISICAL_PROJECT" "$STACK_DIR/.env" prod
+    # The shared OpenAI key lives in god-keys; merge only that key, never the rest.
+    if ! grep -q '^OPENAI_API_KEY=' "$STACK_DIR/.env"; then
+        shared="$(mktemp)"
+        infisical_fetch "${SHARED_INFISICAL_PROJECT:-god-keys}" "$shared" prod >/dev/null
+        grep -E '^OPENAI_API_KEY=' "$shared" >> "$STACK_DIR/.env" || true
+        rm -f "$shared"
+    fi
 elif [[ ! -f "$STACK_DIR/.env" ]]; then
     echo "No Infisical agent and no $STACK_DIR/.env; refusing to start with placeholder secrets." >&2
     exit 1
 fi
 
 # Fail before starting if a required secret is missing or still a placeholder.
-for key in CHAT_HOOK_ADMIN_TOKEN CHAT_HOOK_SOURCE_ROOT CHAT_HOOK_DATA_KEY CHAT_HOOK_OWNER_PASSWORD; do
+for key in CHAT_HOOK_ADMIN_TOKEN CHAT_HOOK_SOURCE_ROOT CHAT_HOOK_DATA_KEY CHAT_HOOK_OWNER_PASSWORD OPENAI_API_KEY; do
     value="$(grep -E "^${key}=" "$STACK_DIR/.env" | tail -n1 | cut -d= -f2- || true)"
     if [[ ${#value} -lt 32 || "$value" == *CHANGE_ME* ]]; then
         echo "Missing or weak $key in Infisical project $INFISICAL_PROJECT" >&2
