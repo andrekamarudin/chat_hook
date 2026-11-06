@@ -12,7 +12,9 @@ A source-agnostic, self-hosted event inbox designed to wake **ChatGPT Work** thr
 - Read APIs require `Authorization: Bearer <CHAT_HOOK_ADMIN_TOKEN>` (32+ chars). Transport must be HTTPS behind Caddy; restrict admin access at proxy/network level as defense in depth.
 - WAHA adapter intentionally **does not persist message text**. It records only the chat ID, message ID and session. ChatGPT must retrieve private message content using the existing authorized Andre WhatsApp plugin, with separate action permissions.
 - Never place secrets or real personal message bodies in Git. SQLite is a sensitive private datastore. Access, backup, and retention policies are required before production.
-- Incoming content is data, never a source of instructions or authorization. Luna Decisions is accessed directly through OpenAI, with only event metadata. ChatGPT delivery is disabled until OAuth, subscription filters, signed callbacks and authorization have been tested.
+- Incoming content is data, never a source of instructions or authorization. Luna Decisions is accessed directly through OpenAI, with only event metadata. ChatGPT delivery only happens to OAuth-authenticated, category-scoped subscriptions whose callback passed a signed challenge.
+- `/mcp` and every OAuth endpoint fail closed (HTTP 503) unless `CHAT_HOOK_PUBLIC_URL`, a 32+ character `CHAT_HOOK_OWNER_PASSWORD` and a 32+ character `CHAT_HOOK_DATA_KEY` are set. Callback secrets are encrypted at rest with a key derived from `CHAT_HOOK_DATA_KEY`; OAuth codes and tokens are stored only as SHA-256 hashes.
+- A callback `2xx` is only a receipt. An event counts as a confirmed wake only after the Work run calls `acknowledge_hook_event` (or records an outcome) with a token for the same owner.
 
 ## Local quick start
 
@@ -34,7 +36,7 @@ Send a signed generic event with any HTTP client. Payload must contain stable st
 ```
 
 Routes:
-- `GET /healthz` public (delivery always reports disabled in this version)
+- `GET /healthz` public; `delivery` is `enabled` only when OAuth and the data key are configured (it does not imply that a subscription exists)
 - `POST /v1/ingest/{source}` source-specific HMAC required
 - `GET /v1/events?status=pending` admin bearer required
 - `GET /v1/events/{id}` admin bearer required
@@ -42,19 +44,31 @@ Routes:
 - `POST /v1/triage/{id}` admin bearer required; invokes direct OpenAI Luna Decisions for non-WAHA-message metadata when `OPENAI_API_KEY` is set; defaults to review on errors
 - `GET /v1/stats/daily?day=YYYY-MM-DD` admin bearer required; reporting only
 - `POST /v1/audit-samples?day=YYYY-MM-DD&size=20` admin bearer required; draws an unbiased random sample for later review
+- `POST /mcp` OAuth bearer required; MCP Streamable HTTP (JSON responses, no SSE) with `events/list`, `events/subscribe`, `events/unsubscribe` and tools `list_hook_events`, `get_hook_event`, `acknowledge_hook_event`, `record_hook_outcome`
+- `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/oauth/register|authorize|token|revoke` single-owner OAuth 2.1 with PKCE S256, dynamic client registration restricted to ChatGPT connector callbacks, refresh rotation with reuse detection
+
+### OAuth scopes and categories
+
+| Scope | Grants |
+|---|---|
+| `hooks.events` | `events/list`, `events/subscribe`, `events/unsubscribe` |
+| `hooks.read` | `list_hook_events`, `get_hook_event` |
+| `hooks.outcomes` | `acknowledge_hook_event`, `record_hook_outcome` |
+
+The consent page also asks which categories (`whatsapp`, `infra`, `research`, `personal`, `projects`) the connection may see. Subscriptions must name one granted `category`; only one live subscription is kept per owner and category, so each category maps to one continuing Work conversation. Internal reports and audit requests use `CHAT_HOOK_REPORT_CATEGORY` (default `personal`).
 
 ## Deployment
 
-`Dockerfile` and `compose/docker-compose.yml` follow existing Contabo conventions, using the external `caddy-net`, a named SQLite volume, and secrets delivered via Infisical to `compose/.env`. **Do not deploy publicly** until Caddy, service-specific secrets, access controls, durable backups and retention are configured. The image deliberately runs as a non-root user and the volume may require ownership setup (`uid 10001`). No deployment workflow is included yet.
+`compose/docker-compose.yml` runs the API (`chat-hook`, on `caddy-net`) and the worker (`chat-hook-worker`: triage, delivery, daily report, audit sampling) against one SQLite volume. `scripts/deploy.sh` fetches secrets from the Infisical project `contabo-chat-hook`, refuses to start with missing or placeholder secrets, and waits for health. `.github/workflows/deploy.yml` runs it on Contabo after CI passes on `main` (requires the `production` environment secrets `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`). See [docs/runbook.md](docs/runbook.md) for first-time setup and the owner-only ChatGPT steps.
 
 ## Roadmap
 
 1. Source-specific signed ingress, normalized queue, idempotent storage, tests. **Implemented.**
-1a. Luna Decisions direct API triage and daily statistics with unknown/unreviewed outcomes. **Implemented but not wired to automatic delivery.**
-2. OAuth 2.1 protected Streamable HTTP MCP endpoint and `events/list`, `events/subscribe`, `events/unsubscribe`.
-3. HTTPS callback verification, strict SSRF defenses, signed Standard Webhooks deliveries, retries and expiry.
+1a. Luna Decisions direct API triage and daily statistics with unknown/unreviewed outcomes. **Implemented.**
+2. OAuth 2.1 protected Streamable HTTP MCP endpoint and `events/list`, `events/subscribe`, `events/unsubscribe`. **Implemented.**
+3. HTTPS callback verification, strict SSRF defenses, signed Standard Webhooks deliveries, retries and expiry. **Implemented.**
 4. WAHA integration, scheduled five-minute *signal checks* (only wake ChatGPT on actionable state), batching and event logs.
-5. End-to-end ChatGPT Work subscription test, admin dashboard and safe auto-reply policy.
+5. End-to-end ChatGPT Work subscription test (owner-only, see runbook), admin dashboard and safe auto-reply policy.
 
 Reference: https://developers.openai.com/plugins/build/mcp-events
 

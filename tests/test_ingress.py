@@ -89,7 +89,9 @@ def test_untrusted_generic_event_needs_explicit_identity(client):
     assert client.post("/v1/ingest/github", content=raw, headers=headers).status_code == 422
 
 
-def test_health_reports_delivery_disabled(client):
+def test_health_reports_delivery_readiness(client, monkeypatch):
+    assert client.get("/healthz").json() == {"status": "ok", "delivery": "enabled"}
+    monkeypatch.delenv("CHAT_HOOK_DATA_KEY")
     assert client.get("/healthz").json() == {"status": "ok", "delivery": "disabled"}
 
 

@@ -1,8 +1,9 @@
 services:
   chat-hook:
     build:
-      context: ..
+      context: ${CHAT_HOOK_SRC:-..}
       dockerfile: Dockerfile
+    image: chat-hook:local
     container_name: chat-hook
     restart: unless-stopped
     read_only: true
@@ -13,6 +14,7 @@ services:
     environment:
       TZ: ${TZ:-Asia/Singapore}
       CHAT_HOOK_DB: /data/events.sqlite3
+      CHAT_HOOK_PUBLIC_URL: ${CHAT_HOOK_PUBLIC_URL:-https://hooks.bytesizeprotip.com}
     expose:
       - "8080"
     volumes:
@@ -25,6 +27,28 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+  chat-hook-worker:
+    image: chat-hook:local
+    pull_policy: never
+    container_name: chat-hook-worker
+    command: ["python", "-m", "chat_hook.worker"]
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ:-Asia/Singapore}
+      CHAT_HOOK_DB: /data/events.sqlite3
+      CHAT_HOOK_PUBLIC_URL: ${CHAT_HOOK_PUBLIC_URL:-https://hooks.bytesizeprotip.com}
+    volumes:
+      - chat-hook-data:/data
+    networks:
+      - default
+    depends_on:
+      chat-hook:
+        condition: service_healthy
 networks:
   caddy-net:
     external: true
