@@ -1,0 +1,1 @@
+"""Chat Hook event gateway."""

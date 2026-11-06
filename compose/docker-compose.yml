@@ -1,0 +1,33 @@
+services:
+  chat-hook:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: chat-hook
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ:-Asia/Singapore}
+      CHAT_HOOK_DB: /data/events.sqlite3
+    expose:
+      - "8080"
+    volumes:
+      - chat-hook-data:/data
+    networks:
+      - default
+      - caddy-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://localhost:8080/healthz',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+networks:
+  caddy-net:
+    external: true
+volumes:
+  chat-hook-data:
+    name: chat-hook-data
