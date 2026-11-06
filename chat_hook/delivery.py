@@ -116,7 +116,7 @@ def identity(owner, url, name, arguments):
 
 
 def subscribe(owner, name, arguments, delivery, ttl_ms=None):
-    if name != NAME or not isinstance(arguments, dict) or set(arguments) - {"source", "event_type"}:
+    if name != NAME or not isinstance(arguments, dict) or set(arguments) - {"source", "event_type", "category"}:
         raise CallbackError("Unsupported event or filter")
     if any(not isinstance(v, str) or not 0 < len(v) <= 100 for v in arguments.values()):
         raise CallbackError("Invalid event filter")
@@ -162,6 +162,12 @@ def unsubscribe(owner, name, arguments, delivery):
 def queue_event(event):
     if event.get("triage_route") not in ("wake", "review"):
         return 0
+    # Enforce runtime switches even for events triaged before a switch changed.
+    from chat_hook.control import get_source
+
+    cfg = get_source(event["source"])
+    if cfg and (not cfg["enabled"] or not cfg["category_enabled"] or cfg["mode"] == "digest"):
+        return 0
     with connect() as db:
         subscriptions = db.execute("SELECT id,arguments FROM subscriptions WHERE expires_at>?",
                                    (utc_now(),)).fetchall()
@@ -171,6 +177,8 @@ def queue_event(event):
             if filters.get("source") not in (None, event["source"]):
                 continue
             if filters.get("event_type") not in (None, event["name"]):
+                continue
+            if filters.get("category") not in (None, cfg["category"] if cfg else None):
                 continue
             count += db.execute("""INSERT OR IGNORE INTO deliveries
                 (event_id,subscription_id,next_attempt) VALUES (?,?,?)""",
@@ -187,7 +195,11 @@ def dispatch(limit=25):
                    e.name,e.summary,e.occurred_at,e.triage_route
             FROM deliveries d JOIN subscriptions s ON s.id=d.subscription_id
             JOIN events e ON e.id=d.event_id
+            LEFT JOIN hook_sources h ON h.slug=e.source
+            LEFT JOIN hook_categories c ON c.slug=h.category
             WHERE d.status='pending' AND d.next_attempt<=? AND s.expires_at>?
+            AND COALESCE(h.enabled,1)=1 AND COALESCE(c.enabled,1)=1
+            AND COALESCE(h.mode,'triage')!='digest'
             ORDER BY d.next_attempt LIMIT ?""", (utc_now(), utc_now(), limit))]
     for row in rows:
         payload = {"eventId": row["event_id"], "name": NAME,
