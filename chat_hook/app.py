@@ -382,6 +382,10 @@ def triage_event(event_id: str):
                       "probability": None, "latency_ms": None, "input_tokens": None}
     # Resolve policy before taking the write lock for the decision record.
     policy = policy_for_source(event["source"])
+    # Canaries record Luna's honest verdict but always request a wake to test the path.
+    decision_route = result["route"]
+    if event.get("canary"):
+        result["route"] = "wake"
     with connect() as db:
         # First successful stored triage wins. Concurrent calls cannot silently overwrite it.
         changed = db.execute("UPDATE events SET triage_route=? WHERE id=? AND triage_route IS NULL",
@@ -390,7 +394,7 @@ def triage_event(event_id: str):
             db.execute("""INSERT INTO decisions
                 (event_id,model,probability,route,status,latency_ms,input_tokens,evaluated_at,policy_version)
                 VALUES (?,?,?,?,?,?,?,?,?)""",
-                (event_id, result["model"], result["probability"], result["route"],
+                (event_id, result["model"], result["probability"], decision_route,
                  result["status"], result["latency_ms"], result["input_tokens"],
                  utc_now(), policy["policy_version"] if policy else None))
         else:
@@ -445,8 +449,10 @@ def create_audit_sample(day: date, size: int = 20):
 from chat_hook.control import router as admin_router
 from chat_hook.mcp_server import router as mcp_router
 from chat_hook.oauth import router as oauth_router
+from chat_hook.pilot import router as pilot_router
 
 app.include_router(admin_router)
+app.include_router(pilot_router)
 app.include_router(oauth_router)
 app.include_router(mcp_router)
 

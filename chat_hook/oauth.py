@@ -122,7 +122,8 @@ def allowed_redirect(uri):
         return False
     return (parts.scheme == "https" and parts.hostname in REDIRECT_HOSTS and parts.port is None
             and not parts.username and not parts.fragment
-            and (parts.path == "/connector/oauth" or parts.path.startswith("/connector/oauth/")))
+            and (parts.path == "/connector_platform_oauth_redirect"
+                 or parts.path == "/connector/oauth" or parts.path.startswith("/connector/oauth/")))
 
 
 def _categories():

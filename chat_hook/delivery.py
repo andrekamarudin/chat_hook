@@ -66,7 +66,12 @@ def initialize():
         add_columns(db, "deliveries", {
             "queued_at": "TEXT", "last_attempt_at": "TEXT", "delivered_at": "TEXT",
             "owner": "TEXT"})
-        add_columns(db, "events", {"queued_at": "TEXT"})
+        add_columns(db, "events", {
+            "queued_at": "TEXT", "signature": "TEXT", "held_reason": "TEXT", "held_at": "TEXT",
+            "duplicate_of": "TEXT", "canary": "INTEGER NOT NULL DEFAULT 0"})
+        add_columns(db, "outcomes", {"acknowledged_at": "TEXT", "labelled_at": "TEXT"})
+        db.execute("CREATE INDEX IF NOT EXISTS idx_events_signature ON events(signature,received_at)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_events_queued ON events(queued_at)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_deliveries_due ON deliveries(status,next_attempt)")
 
 
@@ -310,33 +315,49 @@ def unsubscribe(owner, name, arguments, delivery):
     return {}
 
 
-def queue_event(event):
+def matching_subscriptions(event):
+    """Live (subscription_id, owner) pairs that would receive this event right now."""
     if event.get("triage_route") not in ("wake", "review"):
-        return 0
+        return []
     # Enforce runtime switches even for events triaged before a switch changed.
     from chat_hook.control import get_source
 
     cfg = get_source(event["source"])
     if cfg and (not cfg["enabled"] or not cfg["category_enabled"] or cfg["mode"] == "digest"):
-        return 0
+        return []
     category = event_category(event["source"])
     with connect() as db:
         subscriptions = db.execute(
             "SELECT id,arguments,category,owner FROM subscriptions WHERE expires_at>?", (utc_now(),)
         ).fetchall()
-        count = 0
-        for sid, raw_args, sub_category, sub_owner in subscriptions:
-            filters = json.loads(raw_args)
-            if sub_category is None or sub_category != category:
-                continue
-            if filters.get("source") not in (None, event["source"]):
-                continue
-            if filters.get("event_type") not in (None, event["name"]):
-                continue
-            count += db.execute("""INSERT OR IGNORE INTO deliveries
-                (event_id,subscription_id,next_attempt,queued_at,owner) VALUES (?,?,?,?,?)""",
-                (event["id"], sid, utc_now(), utc_now(), sub_owner)).rowcount
+    matches = []
+    for sid, raw_args, sub_category, sub_owner in subscriptions:
+        filters = json.loads(raw_args)
+        if sub_category is None or sub_category != category:
+            continue
+        if filters.get("source") not in (None, event["source"]):
+            continue
+        if filters.get("event_type") not in (None, event["name"]):
+            continue
+        matches.append((sid, sub_owner))
+    return matches
+
+
+def insert_deliveries(db, event, matches):
+    count = 0
+    for sid, sub_owner in matches:
+        count += db.execute("""INSERT OR IGNORE INTO deliveries
+            (event_id,subscription_id,next_attempt,queued_at,owner) VALUES (?,?,?,?,?)""",
+            (event["id"], sid, utc_now(), utc_now(), sub_owner)).rowcount
     return count
+
+
+def queue_event(event):
+    matches = matching_subscriptions(event)
+    if not matches:
+        return 0
+    with connect() as db:
+        return insert_deliveries(db, event, matches)
 
 
 def _suppress_blocked():

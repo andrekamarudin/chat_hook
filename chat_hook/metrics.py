@@ -35,7 +35,7 @@ def daily_report(day: date) -> dict:
     with connect() as db:
         db.row_factory = __import__("sqlite3").Row
         events = [dict(r) for r in db.execute(
-            "SELECT id,source,triage_route FROM events WHERE received_at>=? AND received_at<?",
+            "SELECT id,source,triage_route,held_reason FROM events WHERE received_at>=? AND received_at<?",
             (start, end),
         )]
         ids = [e["id"] for e in events]
@@ -67,6 +67,7 @@ def daily_report(day: date) -> dict:
         "received": len(events),
         "sources": dict(Counter(e["source"] for e in events)),
         "routes": dict(routes),
+        "held": dict(Counter(e["held_reason"] for e in events if e["held_reason"])),
         "luna_decisions": {
             "requested": sum(r["status"] in ("ok", "error") for r in decisions),
             "successful": len(decisions_success),
@@ -100,6 +101,7 @@ def render_text(report: dict) -> str:
     return (
         f"Chat Hook | {report['date_sgt']} SGT\n"
         f"Events: {report['received']} | routes {report['routes']}\n"
+        f"Held (retained, not woken): {report.get('held') or {}}\n"
         f"Luna Decisions: {report['luna_decisions']}\n"
         f"ChatGPT wakes: {c['wake_confirmed']} confirmed / {c.get('callback_receipts', 0)} callback receipts"
         f" / {c['wake_requested']} requested\n"

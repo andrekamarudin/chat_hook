@@ -92,6 +92,18 @@ def test_register_rejects_foreign_redirects(client):
         assert client.post("/oauth/register", json={"redirect_uris": [uri]}).status_code == 400
 
 
+def test_register_accepts_stable_chatgpt_redirect(client):
+    for uri in ("https://chatgpt.com/connector_platform_oauth_redirect",
+                "https://chatgpt.com/connector/oauth/cb_1"):
+        resp = client.post("/oauth/register", json={
+            "redirect_uris": [uri], "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"], "client_name": "ChatGPT"})
+        assert resp.status_code == 201, resp.text
+    for uri in ("https://chatgpt.com/connector_platform_oauth_redirect/x",
+                "https://evil.example/connector_platform_oauth_redirect"):
+        assert client.post("/oauth/register", json={"redirect_uris": [uri]}).status_code == 400
+
+
 def test_full_flow_and_mcp_initialize(client):
     tokens = login(client)
     assert tokens["token_type"] == "Bearer"
