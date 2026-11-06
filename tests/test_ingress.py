@@ -196,9 +196,10 @@ def test_waha_pointer_bypasses_luna_and_model_error_fails_open(client, monkeypat
 
 
 def test_false_negative_sampling_reports_unknown_until_chatgpt_review(client, monkeypatch):
-    from chat_hook import decisions
     from datetime import datetime
     from zoneinfo import ZoneInfo
+
+    from chat_hook import decisions
 
     monkeypatch.setattr(decisions, "classify", lambda _: {
         "probability": 0.01, "model": "gpt-6-luna", "latency_ms": 12, "input_tokens": 24,

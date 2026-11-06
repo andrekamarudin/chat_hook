@@ -8,7 +8,7 @@ import sqlite3
 import time
 import uuid
 from contextlib import asynccontextmanager, contextmanager
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated
 from zoneinfo import ZoneInfo
@@ -21,7 +21,7 @@ MAX_SKEW_SECONDS = 300
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def database_path() -> Path:
@@ -142,7 +142,7 @@ def verify_ingress(source: str, raw: bytes, headers):
 
 def iso_timestamp(value) -> str:
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, timezone.utc).isoformat()
+        return datetime.fromtimestamp(value, UTC).isoformat()
     if isinstance(value, str):
         try:
             result = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -185,13 +185,13 @@ def normalize(source: str, body: dict) -> dict | None:
             # A source must supply a stable ID to guarantee redelivery deduplication.
             external_id = body.get("id") or f"{data['session']}:{data['status']}:{body.get('timestamp')}"
             summary = "WhatsApp session status changed"
-        return dict(
-            name=event_name,
-            external_id=str(external_id),
-            occurred_at=iso_timestamp(body.get("timestamp") or payload.get("timestamp")),
-            summary=summary,
-            data=data,
-        )
+        return {
+            "name": event_name,
+            "external_id": str(external_id),
+            "occurred_at": iso_timestamp(body.get("timestamp") or payload.get("timestamp")),
+            "summary": summary,
+            "data": data,
+        }
 
     # Generic sources provide their own stable ID. Do not default to a hash of the body:
     # two legitimately distinct notifications can have identical contents.
@@ -204,13 +204,13 @@ def normalize(source: str, body: dict) -> dict | None:
     summary = body.get("summary", name)
     if not isinstance(summary, str):
         raise HTTPException(422, "summary must be a string")
-    return dict(
-        name=name,
-        external_id=external_id,
-        occurred_at=iso_timestamp(body.get("timestamp")),
-        summary=summary[:500],
-        data=body.get("data") if isinstance(body.get("data"), dict) else {},
-    )
+    return {
+        "name": name,
+        "external_id": external_id,
+        "occurred_at": iso_timestamp(body.get("timestamp")),
+        "summary": summary[:500],
+        "data": body.get("data") if isinstance(body.get("data"), dict) else {},
+    }
 
 
 def require_admin(authorization: Annotated[str | None, Header()] = None):
@@ -336,16 +336,16 @@ def triage_event(event_id: str):
     if event["source"] == "waha" and event["name"] == "message.received":
         # Without message content, a probabilistic decision has no meaningful evidence.
         # ChatGPT needs its authorized WhatsApp read tools to inspect the message.
-        result = dict(route="review", status="skipped", model=None, probability=None,
-                      latency_ms=None, input_tokens=None)
+        result = {"route": "review", "status": "skipped", "model": None, "probability": None,
+                  "latency_ms": None, "input_tokens": None}
     else:
         try:
             prediction = classify(event)
             result = dict(route=choose_route(prediction["probability"]), status="ok", **prediction)
         except DecisionError:
             # Fail open to review rather than silently dropping potentially important events.
-            result = dict(route="review", status="error", model="gpt-6-luna",
-                          probability=None, latency_ms=None, input_tokens=None)
+            result = {"route": "review", "status": "error", "model": "gpt-6-luna",
+                      "probability": None, "latency_ms": None, "input_tokens": None}
     with connect() as db:
         # First successful stored triage wins. Concurrent calls cannot silently overwrite it.
         changed = db.execute("UPDATE events SET triage_route=? WHERE id=? AND triage_route IS NULL",

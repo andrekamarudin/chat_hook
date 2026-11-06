@@ -1,7 +1,7 @@
 """Daily Luna Decisions telemetry with explicit review denominators."""
 
 from collections import Counter
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from math import sqrt
 from zoneinfo import ZoneInfo
 
@@ -12,7 +12,7 @@ SGT = ZoneInfo("Asia/Singapore")
 
 def utc_bounds(day: date) -> tuple[str, str]:
     start = datetime.combine(day, time.min, SGT)
-    return start.astimezone(timezone.utc).isoformat(), (start + timedelta(days=1)).astimezone(timezone.utc).isoformat()
+    return start.astimezone(UTC).isoformat(), (start + timedelta(days=1)).astimezone(UTC).isoformat()
 
 
 def percentage(numerator: int, denominator: int) -> float | None:
