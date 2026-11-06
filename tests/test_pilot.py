@@ -97,6 +97,26 @@ def test_no_subscription_does_not_consume_budget_or_hold(monkeypatch):
             assert db.execute("SELECT COUNT(*) FROM events WHERE held_reason IS NOT NULL").fetchone()[0] == 0
 
 
+def test_unmatched_filter_or_disabled_source_is_not_budget_held(monkeypatch):
+    monkeypatch.setenv("CHAT_HOOK_WAKE_LIMIT_HOUR", "0")
+    sent = _fake_sender(monkeypatch)
+    with TestClient(app):
+        add_source("ops", "infra")
+        delivery.subscribe("owner", delivery.NAME, {"category": "infra", "event_type": "other.type"},
+                           {"mode": "webhook", "url": "https://chatgpt.com/hooks/infra",
+                            "secret": "whsec_" + base64.b64encode(b"W" * 32).decode()},
+                           categories=frozenset({"infra"}))
+        for i in range(3):
+            _add_distinct(f"evt_{i}", "ops", f"infra {i}")
+        for _ in range(3):
+            deliver_due_events()
+        assert sent == []
+        with connect() as db:
+            held = db.execute("SELECT COUNT(*) FROM events WHERE held_reason IS NOT NULL").fetchone()[0]
+            queued = db.execute("SELECT COUNT(*) FROM events WHERE queued_at IS NOT NULL").fetchone()[0]
+        assert held == 0 and queued == 0
+
+
 def test_canary_is_admin_only_forces_wake_and_records_luna(monkeypatch):
     monkeypatch.setenv("CHAT_HOOK_ADMIN_TOKEN", ADMIN)
     from chat_hook import decisions

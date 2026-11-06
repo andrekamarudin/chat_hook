@@ -52,36 +52,46 @@ def exempt(event):
     return bool(event.get("canary")) or event["source"] == INTERNAL_SOURCE
 
 
-def admit(event):
-    """Return None to allow a wake, or the hold reason. Records signature/holds durably."""
+def admit(event, db=None):
+    """Return None to allow a wake, or the hold reason. Records signature/holds durably.
+
+    Pass ``db`` to make the decision part of the caller's transaction, so the
+    budget check and the resulting queue write commit together.
+    """
     if exempt(event):
         return None
+    if db is None:
+        with connect() as own:
+            return _admit(event, own)
+    return _admit(event, db)
+
+
+def _admit(event, db):
     cfg = limits()
     sig = signature(event)
     now = datetime.now(UTC)
-    with connect() as db:
-        db.execute("UPDATE events SET signature=? WHERE id=?", (sig, event["id"]))
-        if cfg["dedup_seconds"]:
-            received = event.get("received_at") or now.isoformat()
-            since = (datetime.fromisoformat(received) - timedelta(seconds=cfg["dedup_seconds"])).isoformat()
-            original = db.execute("""SELECT id FROM events WHERE signature=? AND id!=?
-                AND received_at>=? AND received_at<=? AND duplicate_of IS NULL
-                AND triage_route IN ('wake','review') ORDER BY received_at LIMIT 1""",
-                (sig, event["id"], since, received)).fetchone()
-            if original:
-                db.execute("""UPDATE events SET held_reason='duplicate',held_at=?,duplicate_of=?
-                    WHERE id=?""", (utc_now(), original[0], event["id"]))
-                return "duplicate"
-        hour = (now - timedelta(hours=1)).isoformat()
-        day = (now - timedelta(days=1)).isoformat()
-        counted = """SELECT COUNT(*) FROM events WHERE queued_at>=? AND source!=?
-            AND COALESCE(canary,0)=0"""
-        used_hour = db.execute(counted, (hour, INTERNAL_SOURCE)).fetchone()[0]
-        used_day = db.execute(counted, (day, INTERNAL_SOURCE)).fetchone()[0]
-        if used_hour >= cfg["per_hour"] or used_day >= cfg["per_day"]:
-            db.execute("UPDATE events SET held_reason='budget',held_at=? WHERE id=?",
-                       (utc_now(), event["id"]))
-            return "budget"
+    db.execute("UPDATE events SET signature=? WHERE id=?", (sig, event["id"]))
+    if cfg["dedup_seconds"]:
+        received = event.get("received_at") or now.isoformat()
+        since = (datetime.fromisoformat(received) - timedelta(seconds=cfg["dedup_seconds"])).isoformat()
+        original = db.execute("""SELECT id FROM events WHERE signature=? AND id!=?
+            AND received_at>=? AND received_at<=? AND duplicate_of IS NULL
+            AND triage_route IN ('wake','review') ORDER BY received_at LIMIT 1""",
+            (sig, event["id"], since, received)).fetchone()
+        if original:
+            db.execute("""UPDATE events SET held_reason='duplicate',held_at=?,duplicate_of=?
+                WHERE id=?""", (utc_now(), original[0], event["id"]))
+            return "duplicate"
+    hour = (now - timedelta(hours=1)).isoformat()
+    day = (now - timedelta(days=1)).isoformat()
+    counted = """SELECT COUNT(*) FROM events WHERE queued_at>=? AND source!=?
+        AND COALESCE(canary,0)=0"""
+    used_hour = db.execute(counted, (hour, INTERNAL_SOURCE)).fetchone()[0]
+    used_day = db.execute(counted, (day, INTERNAL_SOURCE)).fetchone()[0]
+    if used_hour >= cfg["per_hour"] or used_day >= cfg["per_day"]:
+        db.execute("UPDATE events SET held_reason='budget',held_at=? WHERE id=?",
+                   (utc_now(), event["id"]))
+        return "budget"
     return None
 
 

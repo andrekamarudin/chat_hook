@@ -15,9 +15,8 @@ from zoneinfo import ZoneInfo
 from chat_hook.app import connect, utc_now
 from chat_hook.delivery import (
     dispatch,
-    event_category,
-    has_live_subscription,
-    queue_event,
+    insert_deliveries,
+    matching_subscriptions,
 )
 from chat_hook.delivery import initialize as init_delivery
 from chat_hook.metrics import daily_report, render_text
@@ -70,15 +69,17 @@ def deliver_due_events(limit=50):
             WHERE triage_route IN ('review','wake') AND queued_at IS NULL AND held_reason IS NULL
             AND received_at>=? ORDER BY received_at LIMIT ?""", (cutoff, limit))]
     for event in events:
-        if not has_live_subscription(event_category(event["source"])):
-            continue
-        # Duplicates and budget overflow are retained and reported, never sent.
-        if admit(event) is not None:
-            continue
-        if not queue_event(event):
+        # Only events that would actually reach a subscription consume budget or
+        # can be held; unmatched events stay pending for a later subscription.
+        matches = matching_subscriptions(event)
+        if not matches:
             continue
         with connect() as db:
-            db.execute("UPDATE events SET queued_at=? WHERE id=?", (utc_now(), event["id"]))
+            # Duplicates and budget overflow are retained and reported, never sent.
+            if admit(event, db) is not None:
+                continue
+            if insert_deliveries(db, event, matches):
+                db.execute("UPDATE events SET queued_at=? WHERE id=?", (utc_now(), event["id"]))
     return dispatch(limit)
 
 
