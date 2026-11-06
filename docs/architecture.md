@@ -10,15 +10,15 @@
 
 `source -> verify signature -> cap body -> normalize -> SQLite unique(source,external_id) -> pending queue -> ChatGPT delivery adapter`
 
-The current HTTP surface ends at the pending queue. It deliberately cannot send to ChatGPT or WhatsApp yet.
+The HTTP ingress ends at the queue; the worker fans routed (`wake`/`review`) events out to live subscriptions. Nothing sends to WhatsApp.
 
-## MCP Events delivery (planned)
+## MCP Events delivery
 
-- Standalone authenticated HTTPS `/mcp` endpoint, using MCP Streamable HTTP (or MCP 2.0 HTTP) and OAuth 2.1 with PKCE, authorization server metadata, protected-resource metadata and per-subject permissions.
-- Advertise event capabilities via `initialize`/`server/discover`; implement `events/list`, `events/subscribe`, `events/unsubscribe`.
-- Persist subscriptions including owner, filters, callback URL and secret. Accept only verified external HTTPS callbacks with DNS rebinding and SSRF defenses, no redirects, and Standard Webhooks HMAC signatures.
-- Deliver one event per request with `eventId`, `name`, `timestamp`, `data`, `cursor` and signed headers. Verify callback challenge before activation, retry safely, and stop at expiry or revocation.
-- Model instructions reside in the authenticated ChatGPT Work subscription, not in externally supplied event text. Source events cannot independently grant permission to reply.
+- `chat_hook/oauth.py`: single-owner OAuth 2.1 authorization server (PKCE S256 only, RFC 8707 resource binding to `<public>/mcp`, DCR limited to `https://chatgpt.com|chat.openai.com/connector/oauth...`, rotating refresh tokens with family revocation on reuse, rate-limited consent password). Tokens carry scopes and the categories chosen on the consent page.
+- `chat_hook/mcp_server.py`: `POST /mcp` JSON-RPC (Streamable HTTP, JSON responses only, Origin allow-list). Advertises `events` in `initialize` and via `server/discover`.
+- `chat_hook/delivery.py`: deterministic subscription IDs, constant-time callback challenge (cached 1h per owner/URL/secret), JSON-RPC `-32015` with `data.reason` for callback failures, TTL clamped to 5 min–24 h, one subscription per owner and category, Fernet-encrypted secrets, 10-minute dual signing on secret rotation, SSRF-pinned HTTPS posts without redirects, retries with backoff, no retry on `410`/`413` (410 also expires the subscription), and suppression of queued sends when a source/category is disabled or switched to digest.
+- Event payloads are pointers plus summaries. Model instructions live in the authenticated ChatGPT Work subscription, never in event text. Source events cannot grant permission to reply.
+- Confirmed wake = `acknowledge_hook_event` from the same owner for an event actually delivered to them. Outcome labels may be recorded only for delivered or audit-sampled events; missing labels stay unknown.
 
 ## Reliability and safety gates
 

@@ -1,0 +1,47 @@
+name: Deploy
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-contabo
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy to Contabo
+        uses: appleboy/ssh-action@v1
+        env:
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: DEPLOY_SHA
+          script: |
+            set -euo pipefail
+            if [ ! -d /opt/src/chat_hook/.git ]; then
+              git clone https://github.com/andrekamarudin/chat_hook.git /opt/src/chat_hook
+            fi
+            cd /opt/src/chat_hook
+            git fetch --prune origin main
+            # Deploy exactly the commit CI validated; manual runs take current main.
+            git checkout --detach "${DEPLOY_SHA:-origin/main}"
+            SKIP_GIT_PULL=1 bash scripts/deploy.sh
+      - name: Probe public health
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fsS https://hooks.bytesizeprotip.com/healthz; then exit 0; fi
+            sleep 6
+          done
+          exit 1

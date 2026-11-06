@@ -1,4 +1,4 @@
-"""Authenticated multi-source event inbox. Delivery to ChatGPT is not enabled yet."""
+"""Authenticated multi-source event inbox with an OAuth-protected MCP Events surface."""
 
 import hashlib
 import hmac
@@ -95,8 +95,13 @@ def initialize():
             )
         """)
         from chat_hook.control import setup_schema
+        from chat_hook.oauth import initialize as setup_oauth
 
         setup_schema(db)
+        setup_oauth(db)
+    from chat_hook.delivery import initialize as setup_delivery
+
+    setup_delivery()
 
 
 def sources() -> dict[str, str]:
@@ -249,9 +254,14 @@ app = FastAPI(
 
 @app.get("/healthz")
 def health():
+    from chat_hook.oauth import configured
+
     with connect() as db:
         db.execute("SELECT 1").fetchone()
-    return {"status": "ok", "delivery": "disabled"}
+    # "enabled" means the authenticated MCP surface can accept subscriptions; it does not
+    # mean any ChatGPT Work subscription exists or that a wake has been confirmed.
+    ready = configured() and len(os.getenv("CHAT_HOOK_DATA_KEY", "")) >= 32
+    return {"status": "ok", "delivery": "enabled" if ready else "disabled"}
 
 
 @app.post("/v1/ingest/{source}", status_code=202)
@@ -433,8 +443,12 @@ def create_audit_sample(day: date, size: int = 20):
 
 
 from chat_hook.control import router as admin_router
+from chat_hook.mcp_server import router as mcp_router
+from chat_hook.oauth import router as oauth_router
 
 app.include_router(admin_router)
+app.include_router(oauth_router)
+app.include_router(mcp_router)
 
 
 @app.get("/admin", include_in_schema=False)

@@ -1,26 +1,41 @@
 """MCP Events catalog and dispatch surface.
 
-HTTP authentication must be verified before calling these functions.
+Callers must pass an authenticated Principal (see chat_hook.oauth). Nothing
+here performs HTTP authentication itself.
 """
 
-from chat_hook.delivery import NAME, subscribe, unsubscribe
+from chat_hook.delivery import NAME, CallbackError, subscribe, unsubscribe
+
+VERSION = "0.4.0"
+MCP2_VERSION = "2026-07-28"
+SERVER_INFO = {"name": "Chat Hook", "version": VERSION}
 
 
 def discover():
-    return {"resultType": "complete", "supportedVersions": ["2026-07-28"],
+    return {"resultType": "complete", "supportedVersions": [MCP2_VERSION],
             "capabilities": {"events": {}, "tools": {}},
-            "_meta": {"io.modelcontextprotocol/serverInfo":
-                      {"name": "Chat Hook", "version": "0.3.0"}}}
+            "_meta": {"io.modelcontextprotocol/serverInfo": SERVER_INFO}}
 
 
-def catalog():
+def catalog(categories=None):
+    from chat_hook.control import CATEGORIES
+
+    allowed = sorted(c for c in CATEGORIES if categories is None or c in categories)
     return {"events": [{
         "name": NAME,
-        "description": "A validated event requires an assistant to investigate it.",
+        "description": ("A validated Chat Hook event in one category needs assistant attention. "
+                        "Subscribe once per category from the Work chat that owns that category. "
+                        "The payload is a pointer and summary; use get_hook_event for details."),
         "delivery": ["webhook"],
         "inputSchema": {
             "type": "object",
-            "properties": {"source": {"type": "string"}, "event_type": {"type": "string"}},
+            "properties": {
+                "category": {"type": "string", "enum": allowed,
+                             "description": "Category routed to this conversation."},
+                "source": {"type": "string", "description": "Optional source slug within the category."},
+                "event_type": {"type": "string", "description": "Optional exact event type."},
+            },
+            "required": ["category"],
             "additionalProperties": False,
         },
         "payloadSchema": {
@@ -36,17 +51,21 @@ def catalog():
     }]}
 
 
-def event_request(method, params, owner):
-    if not owner:
+def event_request(method, params, principal):
+    if principal is None or not principal.owner:
         raise ValueError("Missing authenticated principal")
     if method == "server/discover":
         return discover()
+    principal.require("hooks.events")
     if method == "events/list":
-        return catalog()
+        return catalog(principal.categories)
     if method == "events/subscribe":
-        return subscribe(owner, params.get("name"), params.get("arguments") or {},
-                         params.get("delivery"), params.get("ttlMs"))
+        return subscribe(principal.owner, params.get("name"), params.get("arguments") or {},
+                         params.get("delivery"), params.get("ttlMs"), principal.categories)
     if method == "events/unsubscribe":
-        return unsubscribe(owner, params.get("name"), params.get("arguments") or {},
+        return unsubscribe(principal.owner, params.get("name"), params.get("arguments") or {},
                            params.get("delivery"))
     raise ValueError("Unsupported method")
+
+
+__all__ = ["CallbackError", "catalog", "discover", "event_request"]

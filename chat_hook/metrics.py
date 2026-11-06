@@ -47,8 +47,12 @@ def daily_report(day: date) -> dict:
             outcomes = [dict(r) for r in db.execute(
                 f"SELECT event_id,woke_confirmed,actionable,reviewer FROM outcomes WHERE event_id IN ({marks})", ids,
             )]
+            receipts = db.execute(
+                f"SELECT COUNT(DISTINCT event_id) FROM deliveries WHERE status='delivered' AND event_id IN ({marks})",
+                ids,
+            ).fetchone()[0]
         else:
-            decisions, outcomes = [], []
+            decisions, outcomes, receipts = [], [], 0
     routes = Counter(e["triage_route"] or "untriaged" for e in events)
     decisions_success = [r for r in decisions if r["status"] == "ok"]
     assessed = [r for r in outcomes if r["reviewer"] == "chatgpt" and r["actionable"] is not None]
@@ -72,6 +76,7 @@ def daily_report(day: date) -> dict:
         },
         "chatgpt": {
             "wake_requested": routes["wake"] + routes["review"],
+            "callback_receipts": receipts,
             "wake_confirmed": len(confirmed),
             "reviewed_confirmed_wakes": len(assessed_wakes),
             "false_positives": false_positives,
@@ -96,7 +101,8 @@ def render_text(report: dict) -> str:
         f"Chat Hook | {report['date_sgt']} SGT\n"
         f"Events: {report['received']} | routes {report['routes']}\n"
         f"Luna Decisions: {report['luna_decisions']}\n"
-        f"ChatGPT wakes: {c['wake_confirmed']} confirmed / {c['wake_requested']} requested\n"
+        f"ChatGPT wakes: {c['wake_confirmed']} confirmed / {c.get('callback_receipts', 0)} callback receipts"
+        f" / {c['wake_requested']} requested\n"
         f"ChatGPT-rated false positives: {c['false_positives']}/{c['reviewed_confirmed_wakes']} "
         f"({fmt(c['false_positive_pct'])})\n"
         f"False-negative audit: {a['missed_actionable']}/{a['reviewed_suppressed']} "

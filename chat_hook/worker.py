@@ -6,9 +6,10 @@ No WhatsApp replies or model-generated messages are sent by this worker.
 import json
 import logging
 import os
+import sqlite3
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from chat_hook.app import connect, utc_now
@@ -48,13 +49,25 @@ def review_due_events(limit=30):
 
 
 def deliver_due_events(limit=50):
+    """Fan out each routed event once, then send due deliveries.
+
+    An event is marked queued only once it reaches a matching subscription, so a
+    category connected shortly after an event (within 24h) still receives it.
+    """
+    cutoff = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
     with connect() as db:
-        db.row_factory = __import__("sqlite3").Row
-        events = [dict(r) for r in db.execute("""
+        db.row_factory = sqlite3.Row
+        live = db.execute("SELECT 1 FROM subscriptions WHERE expires_at>? LIMIT 1",
+                          (utc_now(),)).fetchone()
+        events = [] if live is None else [dict(r) for r in db.execute("""
             SELECT id,source,name,triage_route FROM events
-            WHERE triage_route IN ('review','wake') ORDER BY received_at LIMIT ?""", (limit,))]
+            WHERE triage_route IN ('review','wake') AND queued_at IS NULL AND received_at>=?
+            ORDER BY received_at LIMIT ?""", (cutoff, limit))]
     for event in events:
-        queue_event(event)
+        if not queue_event(event):
+            continue
+        with connect() as db:
+            db.execute("UPDATE events SET queued_at=? WHERE id=?", (utc_now(), event["id"]))
     return dispatch(limit)
 
 
