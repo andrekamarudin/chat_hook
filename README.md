@@ -2,7 +2,7 @@
 
 A source-agnostic, self-hosted event inbox designed to wake **ChatGPT Work** through **MCP Events**. Sources can include WhatsApp/WAHA, GitHub, services, and scheduled checks. Only the eventual delivery adapter is ChatGPT-specific.
 
-> **Status: ingestion + opt-in triage + inspectable statistics only.** Events are authenticated, normalized and stored. Luna Decisions can be called explicitly via an admin endpoint. **NOT delivered to ChatGPT.** No scheduled agent execution, no outbound WhatsApp sending, and no production deployment yet. See [#1](https://github.com/andrekamarudin/chat_hook/issues/1) and `docs/architecture.md`.
+> **Status: ingestion + runtime admin controls + opt-in triage + inspectable statistics.** Events are authenticated, normalized and stored. Luna Decisions can be called explicitly via an admin endpoint. **NOT delivered to ChatGPT.** No scheduled agent execution, no outbound WhatsApp sending, and no production deployment yet. See [#1](https://github.com/andrekamarudin/chat_hook/issues/1) and `docs/architecture.md`.
 
 ## Security boundaries
 
@@ -67,3 +67,24 @@ Configure `OPENAI_API_KEY` in Infisical when deploying. See
 [decision-routing](docs/decision-routing.md) for privacy tradeoffs and reporting
 rules. A ChatGPT wake or false-positive rate will not be fabricated while
 actual MCP Events subscriptions and ChatGPT labels are unavailable.
+
+## Runtime control panel (new)
+
+Open `/admin` after deployment and sign in with the existing
+`CHAT_HOOK_ADMIN_TOKEN`. Add/disable sources, rotate derived webhook keys,
+map JSON input fields, group hooks into ChatGPT categories, and edit Luna
+predicate criteria plus thresholds without redeploying.
+
+Before enabling new sources, store `CHAT_HOOK_SOURCE_ROOT` (32+ high-entropy
+characters) in the Contabo Infisical service configuration. It is used to
+derive independent per-hook HMAC keys. Legacy environment-backed keys remain
+usable, with on/off control; their rotation requires migration.
+
+A chat URL entered into the admin page is a navigation link, **not** an MCP
+subscription callback. OpenAI supplies the actual signed callback only when
+you subscribe from the intended Work chat. The control panel cannot create or
+bypass that subscription. See [Admin control plane](docs/admin-control.md).
+
+A source toggle does not itself connect Dozzle, Beszel, Uptime Kuma, Fishnet,
+ChatGPT or WhatsApp. Those deliveries require explicit integration and
+end-to-end verification; continue existing critical ntfy alerts until then.

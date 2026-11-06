@@ -64,9 +64,10 @@ def daily_report(day: date) -> dict:
         "sources": dict(Counter(e["source"] for e in events)),
         "routes": dict(routes),
         "luna_decisions": {
-            "requested": len(decisions),
+            "requested": sum(r["status"] in ("ok", "error") for r in decisions),
             "successful": len(decisions_success),
             "errors": sum(r["status"] == "error" for r in decisions),
+            "skipped": sum(r["status"] == "skipped" for r in decisions),
             "routes": dict(Counter(r["route"] for r in decisions_success)),
         },
         "chatgpt": {

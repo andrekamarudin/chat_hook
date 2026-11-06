@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chat Hook | Control Center</title>
+<style>
+:root { font-family: system-ui,-apple-system,Segoe UI,sans-serif; color-scheme: dark; background: #0e1218; color: #e9eef6; }
+*{box-sizing:border-box}body{margin:0;max-width:1200px;padding:36px 18px 88px;margin-inline:auto}
+h1{font-size:1.8rem;letter-spacing:-.04em;margin:0 0 8px}h2{font-size:1.15rem;margin:0 0 14px}p{line-height:1.45;color:#adbacb}
+small,.muted{color:#9aa8ba}a{color:#a9d3ff}.panel{border:1px solid #344051;background:#171e29;border-radius:14px;padding:20px;margin:18px 0}
+.row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.spread{justify-content:space-between}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+input,textarea,select,button{font:inherit;border-radius:7px;padding:9px 11px}input,textarea,select{border:1px solid #455166;background:#111823;color:#fff;min-width:0;max-width:100%}
+input[type=checkbox]{accent-color:#9ac5ff;width:17px;height:17px}.field{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1}
+label{font-size:.86rem;color:#cad6e5}.field>label{font-weight:600}.field>input,.field>select,.field>textarea{width:100%}textarea{min-height:110px;resize:vertical;line-height:1.5}
+button{cursor:pointer;background:#c8e1ff;border:1px solid #c8e1ff;color:#0c1726;font-weight:700}button.secondary{background:#242f40;color:#ecf3fa;border-color:#4d5d72}
+button:disabled{opacity:.45;cursor:not-allowed}.items{display:grid;gap:12px}.item{border:1px solid #384457;border-radius:10px;padding:14px;background:#111822}
+pre{font-size:.8rem;white-space:pre-wrap;overflow-wrap:anywhere;background:#090d12;padding:12px;border-radius:10px;border:1px solid #344051;max-height:290px;overflow:auto}
+#app[hidden],#login[hidden],#secret[hidden]{display:none}#status{min-height:24px;color:#cfdbec}.warning{color:#ffe2a0}.pill{display:inline-block;border:1px solid #4c6080;border-radius:999px;padding:3px 8px;font-size:.75rem;color:#bcd4fa}
+hr{border:0;border-top:1px solid #344051;margin:18px 0}footer{color:#8e9caf;font-size:.82rem} @media(max-width:500px){body{padding:22px 12px} .panel{padding:14px}}
+</style>
+</head>
+<body>
+<header class="row spread"><div><h1>Chat Hook</h1><p style="margin-top:0">Event routing control center</p></div><span class="pill">Delivery requires a verified Work subscription</span></header>
+<section class="panel" id="login">
+<h2>Administrator access</h2><p>Enter your existing Chat Hook admin token. It stays in this browser tab's memory and is not saved to storage or placed in a URL.</p>
+<div class="row"><label class="field">Admin token<input id="token" type="password" autocomplete="off" aria-label="Admin token" placeholder="Enter token"></label><button id="loginBtn">Unlock</button></div>
+</section>
+<div id="status" role="status" aria-live="polite"></div>
+<main id="app" hidden>
+<section class="panel"><div class="row spread"><h2>Hook sources</h2><button id="reload" class="secondary">Refresh</button></div><p>Turn each incoming hook on or off, set its destination category and triage behavior. Changes apply without redeployment. Keys are source-specific.</p><div id="sources" class="items"></div><hr><h2>Add a source</h2>
+<div class="grid">
+<label class="field">Hook ID<input id="slug" placeholder="infra-dozzle" pattern="[a-z][a-z0-9_-]+" autocomplete="off"></label>
+<label class="field">Display name<input id="name" placeholder="Dozzle container alerts"></label>
+<label class="field">Kind<select id="kind"><option value="webhook">Generic webhook</option><option value="infra">Infrastructure logs</option><option value="fishnet">Fishnet newsletter</option><option value="internal">Internal service</option><option value="schedule">Scheduled check</option><option value="waha">WAHA native webhook</option></select></label>
+<label class="field">Destination category<select id="category"></select></label>
+<label class="field">Routing mode<select id="mode"><option value="triage">Luna triage</option><option value="wake">Request ChatGPT review</option><option value="digest">Digest only</option></select></label>
+</div><p class="muted">New hooks start disabled. For non-standard JSON field names, configure field mapping using the admin API. All formats require a stable event ID.</p><button id="addSource">Create source</button>
+<div id="secret" hidden><p class="warning">Copy this signing key securely now. Do not paste it into logs, URLs, or Git.</p><pre id="secretText"></pre><button id="copyKey" class="secondary">Copy key</button></div>
+</section>
+<section class="panel"><h2>Conversation categories & Luna decision criteria</h2><p>Each category can be disabled independently. A chat link is for navigation only: subscribing to MCP Events must happen inside that Work chat. The Luna text below edits <strong>application triage criteria</strong>, not OpenAI's internal system instructions.</p><div id="categories" class="items"></div></section>
+<section class="panel"><h2>Event inspection</h2><p>Latest pending event summaries. Use the authorized WhatsApp or infrastructure tools inside ChatGPT to retrieve more context; do not store raw secrets or private messages here.</p><div id="events" class="items"></div></section>
+<section class="panel"><h2>Decision quality & audit</h2><div class="row"><button id="loadStats" class="secondary">Load yesterday's metrics</button><button id="loadChanges" class="secondary">Refresh configuration audit</button></div><pre id="metrics">No metrics loaded.</pre><pre id="changes">No audit data loaded.</pre></section>
+<section class="panel"><h2>Integrations still requiring setup</h2><p>Dozzle/Beszel/Uptime Kuma alert forwarding, periodic VPS log reviews, signed MCP subscriptions and Fishnet-to-ChatGPT delivery remain integration work. A source switch does not itself install a collector or subscribe ChatGPT.</p><p class="warning">Keep existing critical ntfy alerts active until the new classification path is validated in shadow mode. No email, WhatsApp or ntfy messages are sent by this admin page.</p></section>
+</main>
+<footer>Chat Hook stores operational metadata. The control panel does not store your access token in browser storage.</footer>
+<script>
+(()=>{'use strict';
+const $=id=>document.getElementById(id);let token='';let state={categories:[],sources:[]};
+function note(s){$('status').textContent=s}
+function el(tag,text,cls){let n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n}
+function field(name,val,kind='text'){let wrap=el('label',undefined,'field');wrap.append(el('span',name));let n=kind==='textarea'?el('textarea'):document.createElement('input');if(kind!=='textarea')n.type=kind;n.value=val??'';wrap.append(n);return [wrap,n]}
+function select(options,value){let s=el('select');for(const opt of options){let o=el('option',opt.label??opt.value);o.value=opt.value;s.append(o)}s.value=value;return s}
+async function api(path,options={}){const response=await fetch(path,{...options,headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json',...(options.headers||{})},cache:'no-store'});const raw=await response.text();let body;try{body=raw?JSON.parse(raw):{}}catch{body={error:raw.slice(0,160)}}if(!response.ok)throw Error(body.detail||body.error||'Request failed: '+response.status);return body}
+async function refresh(){let cfg=await api('/v1/admin/config');state=cfg;render();note('Settings loaded')}
+function render(){const sourceEl=$('sources');sourceEl.replaceChildren();for(const s of state.sources){const item=el('article',undefined,'item'),top=el('div',undefined,'row spread');top.append(el('strong',s.name+'  ['+s.slug+']'));let toggle=el('label');let on=document.createElement('input');on.type='checkbox';on.checked=Boolean(s.enabled);toggle.append(on,document.createTextNode(' Enabled'));top.append(toggle);item.append(top);let controls=el('div',undefined,'grid'),cat=select(state.categories.map(c=>({value:c.slug,label:c.name})),s.category),mode=select(['triage','wake','digest'].map(x=>({value:x,label:x})),s.mode),opts=[['Category',cat],['Routing',mode]];for(const [name,node] of opts){let holder=el('label',undefined,'field');holder.append(el('span',name),node);controls.append(holder)}item.append(controls);let actions=el('div',undefined,'row');actions.style.marginTop='12px';let save=el('button','Save settings');save.onclick=()=>perform(async()=>{await api('/v1/admin/sources/'+encodeURIComponent(s.slug),{method:'PATCH',body:JSON.stringify({enabled:on.checked,category:cat.value,mode:mode.value})});await refresh()});actions.append(save);if(s.credential_type==='derived'){let rotate=el('button','Rotate signing key','secondary');rotate.onclick=()=>perform(async()=>{if(!confirm('Rotate '+s.slug+'? Existing senders will fail until updated.'))return;let r=await api('/v1/admin/sources/'+encodeURIComponent(s.slug)+'/rotate',{method:'POST'});showSecret(r.signing_key);await refresh()});actions.append(rotate)}else actions.append(el('small','Legacy key managed in Infisical'));item.append(actions);sourceEl.append(item)}
+const cats=$('categories');cats.replaceChildren();for(const c of state.categories){const item=el('article',undefined,'item');let head=el('div',undefined,'row spread');head.append(el('h3',c.name));let label=el('label');let on=document.createElement('input');on.type='checkbox';on.checked=Boolean(c.enabled);label.append(on,document.createTextNode(' Enabled'));head.append(label);item.append(head);let [urlWrap,url]=field('ChatGPT Work chat URL (display link only)',c.chat_url),[promptWrap,prompt]=field('Luna decision criteria',c.luna_prompt,'textarea'),[ignoreWrap,ignore]=field('Ignore threshold',c.ignore_threshold,'number'),[wakeWrap,wake]=field('Wake threshold',c.wake_threshold,'number');for(const n of [ignore,wake]){n.min='0';n.max='1';n.step='.01'}item.append(urlWrap,promptWrap);let grid=el('div',undefined,'grid');grid.append(ignoreWrap,wakeWrap);item.append(grid);let actions=el('div',undefined,'row');actions.style.marginTop='12px';let save=el('button','Save category');save.onclick=()=>perform(async()=>{await api('/v1/admin/categories/'+c.slug,{method:'PATCH',body:JSON.stringify({enabled:on.checked,chat_url:url.value,luna_prompt:prompt.value,ignore_threshold:Number(ignore.value),wake_threshold:Number(wake.value)})});await refresh()});actions.append(save,el('small','Policy version '+c.policy_version));if(c.chat_url){let a=el('a','Open Work chat');a.href=c.chat_url;a.rel='noopener noreferrer';a.target='_blank';actions.append(a)}item.append(actions);cats.append(item)}
+let options=$('category');options.replaceChildren(...state.categories.map(c=>{let o=el('option',c.name);o.value=c.slug;return o}));}
+async function events(){let r=await api('/v1/events?status=pending&limit=30'),wrap=$('events');wrap.replaceChildren();for(let e of r.events){let item=el('div',undefined,'item');item.append(el('strong',e.source+' · '+e.name),el('p',e.summary),el('small',e.received_at+' · '+e.id));wrap.append(item)}if(!r.events.length)wrap.append(el('p','No pending events'))}
+function showSecret(key){$('secret').hidden=false;$('secretText').textContent=key}
+async function perform(fn){try{note('Saving…');await fn();note('Saved')}catch(e){note('Error: '+e.message)}}
+$('loginBtn').onclick=()=>perform(async()=>{token=$('token').value.trim();await refresh();$('login').hidden=true;$('app').hidden=false;$('token').value='';await events()});
+$('reload').onclick=()=>perform(async()=>{await refresh();await events()});
+$('addSource').onclick=()=>perform(async()=>{let payload={slug:$('slug').value.trim(),name:$('name').value.trim(),kind:$('kind').value,category:$('category').value,mode:$('mode').value,enabled:false};let r=await api('/v1/admin/sources',{method:'POST',body:JSON.stringify(payload)});showSecret(r.signing_key);$('slug').value='';$('name').value='';await refresh()});
+$('copyKey').onclick=()=>{navigator.clipboard.writeText($('secretText').textContent).then(()=>note('Copied')).catch(()=>note('Copy unavailable; select text manually'))};
+$('loadStats').onclick=()=>perform(async()=>{$('metrics').textContent=JSON.stringify(await api('/v1/stats/daily'),null,2)});
+$('loadChanges').onclick=()=>perform(async()=>{$('changes').textContent=JSON.stringify((await api('/v1/admin/audit')).changes,null,2)});
+})();
+</script>
+</body></html>

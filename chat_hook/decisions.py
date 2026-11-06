@@ -35,11 +35,18 @@ def classify(event: dict) -> dict:
         "summary": event["summary"],
         # Deliberately exclude original body, chat IDs and opaque data_json.
     }
+    from chat_hook.control import policy_for_source
+
+    policy = policy_for_source(event["source"])
+    # The owner controls application-level triage criteria, not the model's
+    # internal system instructions. Never allow source text to change authority.
+    criterion = (policy or {}).get("luna_prompt", "").strip()
+    instructions = QUESTION + ("\nOwner triage criteria: " + criterion if criterion else "")
     payload = json.dumps({
         "model": MODEL,
         "input": json.dumps(safe_input, separators=(",", ":")),
         "questions": [{
-            "type": "predicate", "name": "worth_waking", "instructions": QUESTION,
+            "type": "predicate", "name": "worth_waking", "instructions": instructions,
         }],
     }, separators=(",", ":")).encode()
     request = Request(
@@ -78,10 +85,15 @@ def classify(event: dict) -> dict:
     }
 
 
-def choose_route(probability: float) -> str:
+def choose_route(probability: float, source: str | None = None) -> str:
     """Conservative triage policy; calibrate on reviewed examples."""
-    ignore = float(os.environ.get("CHAT_HOOK_IGNORE_THRESHOLD", "0.10"))
-    wake = float(os.environ.get("CHAT_HOOK_WAKE_THRESHOLD", "0.80"))
+    from chat_hook.control import policy_for_source
+
+    policy = policy_for_source(source) if source else None
+    ignore = float(policy["ignore_threshold"]) if policy else float(
+        os.environ.get("CHAT_HOOK_IGNORE_THRESHOLD", "0.10"))
+    wake = float(policy["wake_threshold"]) if policy else float(
+        os.environ.get("CHAT_HOOK_WAKE_THRESHOLD", "0.80"))
     if not 0 <= ignore < wake <= 1:
         raise DecisionError("Invalid routing thresholds")
     if probability <= ignore:

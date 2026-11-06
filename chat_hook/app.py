@@ -76,6 +76,9 @@ def initialize():
                 evaluated_at TEXT NOT NULL
             )
         """)
+        cols = {row[1] for row in db.execute("PRAGMA table_info(decisions)")}
+        if "policy_version" not in cols:
+            db.execute("ALTER TABLE decisions ADD COLUMN policy_version INTEGER")
         db.execute("""
             CREATE TABLE IF NOT EXISTS outcomes (
                 event_id TEXT PRIMARY KEY REFERENCES events(id),
@@ -91,6 +94,9 @@ def initialize():
                 sampled_at TEXT NOT NULL
             )
         """)
+        from chat_hook.control import setup_schema
+
+        setup_schema(db)
 
 
 def sources() -> dict[str, str]:
@@ -107,12 +113,17 @@ def sources() -> dict[str, str]:
 
 
 def verify_ingress(source: str, raw: bytes, headers):
-    secret = sources().get(source)
+    from chat_hook.control import ingress_key
+
+    secret = ingress_key(source)
     if not secret:
         raise HTTPException(404, "Unknown source")
     # WAHA uses HMAC-SHA512(raw body), with a millisecond timestamp header.
     # This differs from our generic signed ingress protocol.
-    if source == "waha":
+    from chat_hook.control import get_source
+
+    config = get_source(source)
+    if source == "waha" or (config and config["kind"] == "waha"):
         timestamp = headers.get("x-webhook-timestamp")
         signature = headers.get("x-webhook-hmac")
         if headers.get("x-webhook-hmac-algorithm") != "sha512":
@@ -155,7 +166,10 @@ def iso_timestamp(value) -> str:
 
 def normalize(source: str, body: dict) -> dict | None:
     """Translate a source payload to a bounded event record. Never treat content as instructions."""
-    if source == "waha":
+    from chat_hook.control import get_source
+
+    config = get_source(source)
+    if source == "waha" or (config and config["kind"] == "waha"):
         name = body.get("event")
         if name not in ("message", "session.status"):
             return None
@@ -259,7 +273,9 @@ async def ingest(source: str, request: Request):
         raise HTTPException(400, "Invalid JSON") from exc
     if not isinstance(body, dict):
         raise HTTPException(422, "Expected JSON object")
-    record = normalize(source, body)
+    from chat_hook.control import mapped_payload
+
+    record = normalize(source, mapped_payload(source, body))
     if record is None:
         return JSONResponse(status_code=202, content={"status": "ignored"})
     event_id = "evt_" + uuid.uuid4().hex
@@ -322,6 +338,7 @@ def ack_event(event_id: str):
 @app.post("/v1/triage/{event_id}", dependencies=[Depends(require_admin)])
 def triage_event(event_id: str):
     """Manual, idempotent triage. Does NOT wake ChatGPT or send any messages."""
+    from chat_hook.control import get_source, policy_for_source
     from chat_hook.decisions import DecisionError, choose_route, classify
 
     with connect() as db:
@@ -333,7 +350,14 @@ def triage_event(event_id: str):
         if event["triage_route"] is not None:
             return {"id": event_id, "route": event["triage_route"], "status": "already_triaged"}
 
-    if event["source"] == "waha" and event["name"] == "message.received":
+    config = get_source(event["source"])
+    if config and (not config["enabled"] or not config["category_enabled"]):
+        result = {"route": "digest", "status": "skipped", "model": None,
+                  "probability": None, "latency_ms": None, "input_tokens": None}
+    elif config and config["mode"] in ("wake", "digest"):
+        result = {"route": config["mode"], "status": "skipped", "model": None,
+                  "probability": None, "latency_ms": None, "input_tokens": None}
+    elif config and config["kind"] == "waha" and event["name"] == "message.received":
         # Without message content, a probabilistic decision has no meaningful evidence.
         # ChatGPT needs its authorized WhatsApp read tools to inspect the message.
         result = {"route": "review", "status": "skipped", "model": None, "probability": None,
@@ -341,21 +365,24 @@ def triage_event(event_id: str):
     else:
         try:
             prediction = classify(event)
-            result = dict(route=choose_route(prediction["probability"]), status="ok", **prediction)
+            result = dict(route=choose_route(prediction["probability"], event["source"]), status="ok", **prediction)
         except DecisionError:
             # Fail open to review rather than silently dropping potentially important events.
             result = {"route": "review", "status": "error", "model": "gpt-6-luna",
                       "probability": None, "latency_ms": None, "input_tokens": None}
+    # Resolve policy before taking the write lock for the decision record.
+    policy = policy_for_source(event["source"])
     with connect() as db:
         # First successful stored triage wins. Concurrent calls cannot silently overwrite it.
         changed = db.execute("UPDATE events SET triage_route=? WHERE id=? AND triage_route IS NULL",
                              (result["route"], event_id)).rowcount
         if changed:
             db.execute("""INSERT INTO decisions
-                (event_id,model,probability,route,status,latency_ms,input_tokens,evaluated_at)
-                VALUES (?,?,?,?,?,?,?,?)""",
+                (event_id,model,probability,route,status,latency_ms,input_tokens,evaluated_at,policy_version)
+                VALUES (?,?,?,?,?,?,?,?,?)""",
                 (event_id, result["model"], result["probability"], result["route"],
-                 result["status"], result["latency_ms"], result["input_tokens"], utc_now()))
+                 result["status"], result["latency_ms"], result["input_tokens"],
+                 utc_now(), policy["policy_version"] if policy else None))
         else:
             result["route"] = db.execute("SELECT triage_route FROM events WHERE id=?", (event_id,)).fetchone()[0]
             result["status"] = "already_triaged"
@@ -403,3 +430,25 @@ def create_audit_sample(day: date, size: int = 20):
     return {"date_sgt": day.isoformat(), "population_ignored": len(ids),
             "sample_ids": current + selected, "reviewed": False,
             "note": "Random sample only. A ChatGPT review pipeline is not deployed."}
+
+
+from chat_hook.control import router as admin_router
+
+app.include_router(admin_router)
+
+
+@app.get("/admin", include_in_schema=False)
+def admin_page():
+    """Public login shell. Admin data is fetched separately with bearer auth."""
+    from fastapi.responses import HTMLResponse
+
+    page = Path(__file__).with_name("admin.html").read_text(encoding="utf-8")
+    return HTMLResponse(page, headers={
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
+                                   "script-src 'unsafe-inline'; connect-src 'self'; "
+                                   "form-action 'none'; frame-ancestors 'none'",
+    })
