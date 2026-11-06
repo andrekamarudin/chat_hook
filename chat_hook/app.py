@@ -338,8 +338,8 @@ def ack_event(event_id: str):
 @app.post("/v1/triage/{event_id}", dependencies=[Depends(require_admin)])
 def triage_event(event_id: str):
     """Manual, idempotent triage. Does NOT wake ChatGPT or send any messages."""
-    from chat_hook.decisions import DecisionError, choose_route, classify
     from chat_hook.control import get_source, policy_for_source
+    from chat_hook.decisions import DecisionError, choose_route, classify
 
     with connect() as db:
         db.row_factory = sqlite3.Row
@@ -432,7 +432,7 @@ def create_audit_sample(day: date, size: int = 20):
             "note": "Random sample only. A ChatGPT review pipeline is not deployed."}
 
 
-from chat_hook.control import router as admin_router  # noqa: E402
+from chat_hook.control import router as admin_router
 
 app.include_router(admin_router)
 
